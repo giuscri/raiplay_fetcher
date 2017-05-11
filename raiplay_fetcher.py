@@ -20,10 +20,11 @@ from requests import get
 from sys import argv, exit
 from re import match
 from math import ceil
-from subprocess import run
+from subprocess import run, PIPE
 from uuid import uuid4
 
 URL_FMT = '[http://|https://].*[^/]$'
+DEBUG = False
 
 def fetch_index(page_url, hd=True):
     """
@@ -40,6 +41,8 @@ def fetch_index(page_url, hd=True):
     r = get(master_url)
     if not r.ok: fail(b'')
 
+    if DEBUG: print('### Fetched master index')
+
     master_index = tuple(filter(lambda l: not l.startswith('#'), r.text.strip().split('\n')))
 
     index_url = master_index[0]
@@ -47,6 +50,8 @@ def fetch_index(page_url, hd=True):
 
     r = get(index_url)
     if not r.ok: fail(b'')
+
+    if DEBUG: print('### Fetched segments index')
 
     lines = r.text.strip().split('\n')
     return tuple(filter(lambda l: not l.startswith('#'), lines))
@@ -62,7 +67,7 @@ def fail(blob):
     with open('/tmp/{}'.format(random_fname), 'wb') as f:
         f.write(blob)
 
-    print('\n*** :(, Written current blob to /tmp/{}'.format(random_fname))
+    print('*** :(, Written current blob to /tmp/{}'.format(random_fname))
 
     exit(-1)
 
@@ -82,17 +87,20 @@ if __name__ == '__main__':
         'url': 'URL of the official video page, http://www.raiplay.it/video/*',
         'file': 'Where to store the download',
         'nohd': "If you don't want high definition content",
+        'debug': 'Start in debug mode - verbose and only few segments fetched',
     }
 
     argument_parser = ArgumentParser(description='Download videos from raiplay.it')
     argument_parser.add_argument('url', help=help['url'])
     argument_parser.add_argument('file', help=help['file'])
     argument_parser.add_argument('--nohd', help=help['nohd'], action='store_true')
+    argument_parser.add_argument('--debug', help=help['debug'], action='store_true')
     args = argument_parser.parse_args()
 
-    base_url, output_fname, hd = args.url, args.file, not args.nohd
+    base_url, output_fname, hd, DEBUG = args.url, args.file, not args.nohd, args.debug
 
     index = fetch_index(base_url, hd=hd)
+    if DEBUG: index = index[:3]
     n = len(index)
     blob = b''
 
@@ -100,12 +108,20 @@ if __name__ == '__main__':
         draw_progress_bar(i, n)
 
         r = get(url)
-        if not r.ok: fail(blob)
+        if not r.ok: print(); fail(blob)
         blob += r.content
 
-    # Try to run the ffmpeg conversion
-    cmd = 'ffmpeg -i - -c copy {} 2>/dev/null'.format(output_fname)
-    process = run(cmd, shell=True, input=blob)
-    if process.returncode != 0: fail(blob)
+    print()
 
-    print('\n*** :)')
+    # Try to run the ffmpeg conversion
+    cmd = 'ffmpeg -loglevel 16 -i - -c copy {}'.format(output_fname)
+    process = run(cmd, shell=True, input=blob, stderr=PIPE)
+    if process.returncode != 0:
+        if DEBUG:
+            error = process.stderr.decode()
+            print('### ', end='')
+            print('\n### '.join(error.strip().split('\n')))
+
+        fail(blob)
+
+    print('*** :)')
